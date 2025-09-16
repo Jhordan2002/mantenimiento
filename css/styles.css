@@ -1,0 +1,357 @@
+/* ====================== */
+/* 1) Reset y tipografía  */
+/* ====================== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+/* ========================= */
+/* 2) Animación de fondo     */
+/* ========================= */
+@keyframes animatedBackground {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ====================== */
+/* 3) Estilos del <body>  */
+/* ====================== */
+body {
+  min-height: 100vh;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  background-size: 200% 200%;
+  animation: animatedBackground 10s ease-in-out infinite;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* ========================== */
+/* 4) Contenedor principal    */
+/* ========================== */
+.login-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInWrapper 1.2s forwards ease-in-out;
+}
+
+@keyframes fadeInWrapper {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ====================== */
+/* 5) Logo y título       */
+/* ====================== */
+.logo-header {
+  text-align: center;
+  margin-bottom: 30px;
+  position: relative;
+  opacity: 0;
+  transform: translateY(-15px);
+  animation: fadeInLogo 1s 0.3s forwards ease-in-out;
+}
+
+@keyframes fadeInLogo {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.logo-header img {
+  height: 100px;
+  transition: height 0.3s ease;
+}
+
+.logo-header h1 {
+  margin-top: 10px;
+  font-size: 32px;
+  font-weight: 700;
+  font-family: 'Montserrat', sans-serif;
+  letter-spacing: 1px;
+  background: linear-gradient(90deg, #FFD700, #FFA500);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+/* ====================== */
+/* 6) Panel de login      */
+/* ====================== */
+.login-container {
+  position: relative;
+  z-index: 2;
+  width: 90%;
+  max-width: 400px;
+  padding: 40px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInLogin 1.3s 0.6s forwards ease-in-out;
+}
+
+@keyframes fadeInLogin {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-container h2 {
+  text-align: center;
+  margin-bottom: 25px;
+  font-size: 26px;
+  letter-spacing: 0.5px;
+}
+
+/* ====================== */
+/* 7) Grupos de formulario */
+/* ====================== */
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  outline: none;
+  color: #333;
+  transition: box-shadow 0.2s;
+}
+
+.form-group input:focus {
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+
+/* ====================== */
+/* 8) Input contraseña    */
+/* ====================== */
+.password-wrapper {
+  position: relative;
+}
+
+.password-wrapper input {
+  padding-right: 40px;
+}
+
+.password-wrapper #togglePassword {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  color: #333;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+.password-wrapper #togglePassword:hover {
+  opacity: 1;
+}
+
+/* ====================== */
+/* 9) Botón principal     */
+/* ====================== */
+.btn {
+  width: 100%;
+  padding: 14px;
+  background: #e60000;
+  border: none;
+  border-radius: 4px;
+  font-size: 18px;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.btn:hover {
+  background: #cc0000;
+  transform: scale(1.03);
+}
+
+/* ====================== */
+/* 10) Mensajes de alerta */
+/* ====================== */
+.alert {
+  padding: 12px;
+  margin-bottom: 15px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.alert.error {
+  background: rgba(255, 0, 0, 0.8);
+}
+
+.alert.success {
+  background: rgba(0, 128, 0, 0.8);
+}
+
+/* ====================== */
+/* 11) Pie de página      */
+/* ====================== */
+footer {
+  text-align: center;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* ====================== */
+/* 12) Overlay de carga   */
+/* ====================== */
+#loading-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+}
+
+#loading-overlay img {
+  width: 100px;
+  height: auto;
+  animation: rotateFlor 1.0s linear infinite;
+}
+
+@keyframes rotateFlor {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ================================= */
+/* 13) Media Queries (Responsive)    */
+/* ================================= */
+
+/* Pantallas medianas (tablets y dispositivos pequeños en orientación horizontal) */
+@media (min-width: 720px) and (max-width: 1280px) {
+  .logo-header img {
+    height: 90px;
+  }
+  .logo-header h1 {
+    font-size: 28px;
+  }
+  .login-container {
+    padding: 30px;
+    max-width: 350px;
+  }
+  .form-group input {
+    padding: 10px;
+    font-size: 15px;
+  }
+  .btn {
+    padding: 12px;
+    font-size: 16px;
+  }
+}
+
+/* Smartphones (menos de 480px) */
+@media (max-width: 480px) {
+  body {
+    font-size: 14px; /* Tamaño de fuente base reducido para dispositivos pequeños */
+  }
+  .logo-header img {
+    height: 70px; /* Tamaño de logo ajustado */
+  }
+  .logo-header h1 {
+    font-size: 22px;
+    margin-top: 8px;
+  }
+  .login-container {
+    padding: 15px;
+    max-width: 90%;
+    margin: 0 5%;
+  }
+  .form-group input {
+    padding: 10px;
+    font-size: 14px;
+  }
+  .btn {
+    padding: 10px;
+    font-size: 14px;
+  }
+}
+
+/* Pantallas extra pequeñas (por debajo de 360px) */
+@media (max-width: 360px) {
+  .logo-header img {
+    height: 60px;
+  }
+  .logo-header h1 {
+    font-size: 20px;
+  }
+  .login-container {
+    padding: 10px;
+  }
+  .form-group input {
+    padding: 8px;
+    font-size: 13px;
+  }
+  .btn {
+    padding: 8px;
+    font-size: 13px;
+  }
+}
+  
+/* 1) Importa la fuente Montserrat */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap');
+
+.logo-header h1 {
+  margin-top: 10px;
+  font-size: 32px;
+  font-weight: 700;
+  font-family: 'Montserrat', sans-serif;
+  letter-spacing: 1px;
+  background: linear-gradient(90deg, #FFD700, #FFA500);
+  -webkit-background-clip: text;
+  color: transparent;
+}
+/* Estilos para los inputs en el formulario */
+.form-group input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ccc;           /* Borde sutil */
+  border-radius: 4px;
+  font-size: 16px;
+  outline: none;
+  color: #333;
+  background-color: #f2f2f2;          /* Fondo gris claro cuando el campo está vacío */
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Estilos para cuando el input está enfocado (focus) */
+.form-group input:focus {
+  background-color: #fff;           /* Fondo blanco al enfocar para mayor legibilidad */
+  border-color: #e60000;            /* Borde rojo para resaltar */
+  box-shadow: 0 0 6px rgba(230, 0, 0, 0.5);
+}

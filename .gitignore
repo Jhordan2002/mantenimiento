@@ -1,0 +1,15 @@
+
+# Nunca subir llaves
+*.pem
+*.key
+id_*
+*.pub
+
+
+# SSH keys
+hola1234
+hola1234.pub
+id_*
+*.pem
+*.key
+
