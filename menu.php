@@ -77,14 +77,10 @@ if ($result) {
           <!-- Menú principal -->
           <ul class="nav-menu" id="navMenu">
             <li class="nav-item dropdown">
-              <a href="#" class="nav-link">Información OPE</a>
+              <a href="#" class="nav-link">Mantenimiento</a>
               <ul class="dropdown-menu">
-                <li><a href="morralla.php" class="dropdown-link">Pedido Morralla</a></li>
-                <li><a href="historico.php" class="dropdown-link">Envio Toner</a></li>
-                <li><a href="bitacoraMayoristas.php" class="dropdown-link">Bitácora Proveedores</a></li>
-                <li><a href="bitacoravalores.php" class="dropdown-link">Entrega de Valores</a></li>
-                <li><a href="plantillatiendas.php" class="dropdown-link">Plantilla</a></li>
-                <li><a href="./proyecto/index.php" class="dropdown-link">Reporte de Ventas</a></li>
+                <li><a href="mantto_admin_alertas.php" class="dropdown-link">Emergencias (Alertas)</a></li>
+                <li><a href="mantto_admin_eventos.php" class="dropdown-link">Eventos (Áreas/Subáreas)</a></li>
               </ul>
             </li>
           </ul>
