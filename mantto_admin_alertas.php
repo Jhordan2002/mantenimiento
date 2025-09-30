@@ -27,9 +27,24 @@ function get_csrf_token(array &$session, $key = 'csrf_alertas')
         : sha1(uniqid(mt_rand(), true));
     return $session[$key];
 }
+function audit_log(mysqli $mysqli, $usuario, $entity, $entityId, $action, $details = '', $remoteAddr = '', $userAgent = '')
+{
+    $stmt = $mysqli->prepare(
+        "INSERT INTO mantto_bitacora (usuario, entidad, entidad_id, accion, detalles, ip, user_agent, fecha)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+    );
+    if (!$stmt) {
+        return;
+    }
+    $stmt->bind_param('ssissss', $usuario, $entity, $entityId, $action, $details, $remoteAddr, $userAgent);
+    $stmt->execute();
+    $stmt->close();
+}
+
+
 $csrf = get_csrf_token($_SESSION, 'csrf_alertas');
-
-
+$remoteAddr = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+$userAgent  = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
 $msg = isset($_GET['msg']) ? (string)$_GET['msg'] : '';
 $err = isset($_GET['err']) ? (string)$_GET['err'] : '';
 
@@ -62,6 +77,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $ins->bind_param('ss', $codigo, $nombre);
                                 if ($ins->execute()) {
                                     $r_msg = 'Alerta agregada.';
+                                    $new_id = $ins->insert_id;
+                                    audit_log(
+                                        $mysqli,
+                                        $_SESSION['usuarioactual'],
+                                        'alerta',
+                                        (int)$new_id,
+                                        'agregar',
+                                        json_encode(array('codigo' => $codigo, 'nombre' => $nombre)),
+                                        $remoteAddr,
+                                        $userAgent
+                                    );
                                 } else {
                                     $r_err = 'Error al agregar: ' . $ins->error;
                                 }
@@ -83,10 +109,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'toggle') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             if ($id > 0) {
+                // Leer estado previo para saber si activamos o desactivamos
+                $prev = null;
+                if ($s0 = $mysqli->prepare("SELECT activo FROM mantto_alertas WHERE id_alerta=? LIMIT 1")) {
+                    $s0->bind_param('i', $id);
+                    if ($s0->execute()) {
+                        $s0->bind_result($prev);
+                        $s0->fetch();
+                    }
+                    $s0->close();
+                }
+                $accionLog = ($prev === 1) ? 'desactivar' : 'activar';
+
                 if ($st = $mysqli->prepare("UPDATE mantto_alertas SET activo=IF(activo=1,0,1) WHERE id_alerta=? LIMIT 1")) {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Estado actualizado.';
+                        audit_log(
+                            $mysqli,
+                            $_SESSION['usuarioactual'],
+                            'alerta',
+                            (int)$id,
+                            $accionLog,
+                            json_encode(array('prev_activo' => (int)$prev)),
+                            $remoteAddr,
+                            $userAgent
+                        );
                     } else {
                         $r_err = 'Error al actualizar: ' . $st->error;
                     }
@@ -97,6 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+
         if ($action === 'eliminar') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             if ($id > 0) {
@@ -104,9 +153,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Alerta eliminada.';
+                        audit_log($mysqli, $_SESSION['usuarioactual'], 'alerta', (int)$id, 'eliminar', '', $remoteAddr, $userAgent);
                     } else {
                         $r_err = 'Error al eliminar: ' . $st->error;
                     }
+
                     $st->close();
                 } else {
                     $r_err = 'Error al preparar DELETE: ' . $mysqli->error;

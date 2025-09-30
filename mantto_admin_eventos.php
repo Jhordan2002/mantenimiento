@@ -13,10 +13,11 @@ if (empty($_SESSION['usuarioactual'])) {
     exit;
 }
 
-function h($s)
+function html_escape($value)
 {
-    return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
+
 function get_csrf_token(array &$session, $key = 'csrf_eventos')
 {
     if (!empty($session[$key])) return $session[$key];
@@ -25,8 +26,24 @@ function get_csrf_token(array &$session, $key = 'csrf_eventos')
         : sha1(uniqid(mt_rand(), true));
     return $session[$key];
 }
+function audit_log(mysqli $mysqli, $usuario, $entity, $entityId, $action, $details = '', $remoteAddr = '', $userAgent = '')
+{
+    $stmt = $mysqli->prepare(
+        "INSERT INTO mantto_bitacora (usuario, entidad, entidad_id, accion, detalles, ip, user_agent, fecha)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+    );
+    if (!$stmt) {
+        return;
+    }
+    $stmt->bind_param('ssissss', $usuario, $entity, $entityId, $action, $details, $remoteAddr, $userAgent);
+    $stmt->execute();
+    $stmt->close();
+}
+
 
 $csrf = get_csrf_token($_SESSION, 'csrf_eventos');
+$remoteAddr = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+$userAgent  = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
 
 
 $msg = isset($_GET['msg']) ? (string)$_GET['msg'] : '';
@@ -51,7 +68,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($nombre === '') {
                 $r_err = 'Escribe el nombre del área.';
             } else {
-                if ($st = $mysqli->prepare("SELECT 1 FROM mantto_areas WHERE nombre=? LIMIT 1")) {
+                $st = $mysqli->prepare("SELECT 1 FROM mantto_areas WHERE nombre=? LIMIT 1");
+                if ($st) {
                     $st->bind_param('s', $nombre);
                     if ($st->execute()) {
                         $st->store_result();
@@ -59,10 +77,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $r_err = 'Ya existe un área con ese nombre.';
                         } else {
                             $st->close();
-                            if ($ins = $mysqli->prepare("INSERT INTO mantto_areas (nombre, activo) VALUES (?, 1)")) {
+                            $ins = $mysqli->prepare("INSERT INTO mantto_areas (nombre, activo) VALUES (?, 1)");
+                            if ($ins) {
                                 $ins->bind_param('s', $nombre);
                                 if ($ins->execute()) {
                                     $r_msg = 'Área agregada.';
+                                    $new_id = $ins->insert_id;
+                                    audit_log(
+                                        $mysqli,
+                                        $_SESSION['usuarioactual'],
+                                        'area',
+                                        (int)$new_id,
+                                        'agregar',
+                                        json_encode(array('nombre' => $nombre)),
+                                        $remoteAddr,
+                                        $userAgent
+                                    );
                                 } else {
                                     $r_err = 'Error al agregar área: ' . $ins->error;
                                 }
@@ -74,7 +104,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $r_err = 'Error al ejecutar SELECT área: ' . $st->error;
                     }
-                    if ($st) $st->close();
+                    $st && $st->close();
+                    $st = null;
                 } else {
                     $r_err = 'Error al preparar SELECT área: ' . $mysqli->error;
                 }
@@ -84,10 +115,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'toggle_area') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             if ($id > 0) {
-                if ($st = $mysqli->prepare("UPDATE mantto_areas SET activo=IF(activo=1,0,1) WHERE id_area=? LIMIT 1")) {
+                $prev = null;
+                $s0 = $mysqli->prepare("SELECT activo FROM mantto_areas WHERE id_area=? LIMIT 1");
+                if ($s0) {
+                    $s0->bind_param('i', $id);
+                    if ($s0->execute()) {
+                        $s0->bind_result($prev);
+                        $s0->fetch();
+                    }
+                    $s0->close();
+                }
+
+                $accionLog = ((int)$prev === 1) ? 'desactivar' : 'activar';
+
+
+                $st = $mysqli->prepare("UPDATE mantto_areas SET activo=IF(activo=1,0,1) WHERE id_area=? LIMIT 1");
+                if ($st) {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Área actualizada.';
+                        audit_log(
+                            $mysqli,
+                            $_SESSION['usuarioactual'],
+                            'area',
+                            (int)$id,
+                            $accionLog,
+                            json_encode(array('prev_activo' => (int)$prev)),
+                            $remoteAddr,
+                            $userAgent
+                        );
                     } else {
                         $r_err = 'Error al actualizar área: ' . $st->error;
                     }
@@ -98,9 +154,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+
         if ($action === 'delete_area') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             if ($id > 0) {
+                // 1) Obtener info del área ANTES de borrar (para bitácora)
+                $areaNombre = null;
+                $areaActivo = null;
+                if ($sInfo = $mysqli->prepare("SELECT nombre, activo FROM mantto_areas WHERE id_area=? LIMIT 1")) {
+                    $sInfo->bind_param('i', $id);
+                    if ($sInfo->execute()) {
+                        $sInfo->bind_result($areaNombre, $areaActivo);
+                        $sInfo->fetch();
+                    }
+                    $sInfo->close();
+                }
+
+                // 2) Verificar si tiene subáreas
                 $tiene = 0;
                 if ($st = $mysqli->prepare("SELECT COUNT(*) FROM mantto_subareas WHERE id_area=?")) {
                     $st->bind_param('i', $id);
@@ -110,13 +180,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     $st->close();
                 }
+
                 if ($tiene > 0) {
                     $r_err = 'No se puede eliminar: el área tiene subáreas.';
                 } else {
+                    // 3) Eliminar
                     if ($del = $mysqli->prepare("DELETE FROM mantto_areas WHERE id_area=? LIMIT 1")) {
                         $del->bind_param('i', $id);
                         if ($del->execute()) {
                             $r_msg = 'Área eliminada.';
+                            // 4) Enviar detalles reales a bitácora
+                            $details = json_encode(
+                                array(
+                                    'id_area' => $id,
+                                    'nombre'  => $areaNombre,
+                                    'activo'  => (int)$areaActivo
+                                ),
+                                JSON_UNESCAPED_UNICODE
+                            );
+                            audit_log($mysqli, $_SESSION['usuarioactual'], 'area', (int)$id, 'eliminar', $details, $remoteAddr, $userAgent);
                         } else {
                             $r_err = 'Error al eliminar área: ' . $del->error;
                         }
@@ -128,6 +210,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+
         if ($action === 'add_subarea') {
             $id_area = isset($_POST['id_area']) ? (int)$_POST['id_area'] : 0;
             $nombre  = isset($_POST['nombre']) ? trim($_POST['nombre']) : '';
@@ -137,7 +220,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif ($nombre === '') {
                 $r_err = 'Escribe el nombre de la subárea.';
             } else {
-                if ($st = $mysqli->prepare("SELECT 1 FROM mantto_subareas WHERE id_area=? AND nombre=? LIMIT 1")) {
+                $st = $mysqli->prepare("SELECT 1 FROM mantto_subareas WHERE id_area=? AND nombre=? LIMIT 1");
+                if ($st) {
                     $st->bind_param('is', $id_area, $nombre);
                     if ($st->execute()) {
                         $st->store_result();
@@ -145,10 +229,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $r_err = 'Ya existe esa subárea en el área seleccionada.';
                         } else {
                             $st->close();
-                            if ($ins = $mysqli->prepare("INSERT INTO mantto_subareas (id_area, nombre, activo) VALUES (?, ?, 1)")) {
+                            $ins = $mysqli->prepare("INSERT INTO mantto_subareas (id_area, nombre, activo) VALUES (?, ?, 1)");
+                            if ($ins) {
                                 $ins->bind_param('is', $id_area, $nombre);
                                 if ($ins->execute()) {
                                     $r_msg = 'Subárea agregada.';
+                                    $new_id = $ins->insert_id;
+                                    audit_log(
+                                        $mysqli,
+                                        $_SESSION['usuarioactual'],
+                                        'subarea',
+                                        (int)$new_id,
+                                        'agregar',
+                                        json_encode(array('id_area' => $id_area, 'nombre' => $nombre)),
+                                        $remoteAddr,
+                                        $userAgent
+                                    );
                                 } else {
                                     $r_err = 'Error al agregar subárea: ' . $ins->error;
                                 }
@@ -160,7 +256,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $r_err = 'Error al ejecutar SELECT subárea: ' . $st->error;
                     }
-                    if ($st) $st->close();
+                    $st && $st->close();
+                    $st = null;
                 } else {
                     $r_err = 'Error al preparar SELECT subárea: ' . $mysqli->error;
                 }
@@ -172,10 +269,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id_area = isset($_POST['id_area']) ? (int)$_POST['id_area'] : 0;
             $redir_params['area_id'] = $id_area;
             if ($id > 0) {
-                if ($st = $mysqli->prepare("UPDATE mantto_subareas SET activo=IF(activo=1,0,1) WHERE id_subarea=? LIMIT 1")) {
+                $prev = null;
+                $s0 = $mysqli->prepare("SELECT activo FROM mantto_subareas WHERE id_subarea=? LIMIT 1");
+                if ($s0) {
+                    $s0->bind_param('i', $id);
+                    if ($s0->execute()) {
+                        $s0->bind_result($prev);
+                        $s0->fetch();
+                    }
+                    $s0->close();
+                }
+
+                $accionLog = ((int)$prev === 1) ? 'desactivar' : 'activar';
+
+
+                $st = $mysqli->prepare("UPDATE mantto_subareas SET activo=IF(activo=1,0,1) WHERE id_subarea=? LIMIT 1");
+                if ($st) {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Subárea actualizada.';
+                        audit_log(
+                            $mysqli,
+                            $_SESSION['usuarioactual'],
+                            'subarea',
+                            (int)$id,
+                            $accionLog,
+                            json_encode(array('prev_activo' => (int)$prev, 'id_area' => $id_area)),
+                            $remoteAddr,
+                            $userAgent
+                        );
                     } else {
                         $r_err = 'Error al actualizar subárea: ' . $st->error;
                     }
@@ -186,15 +308,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+
         if ($action === 'delete_subarea') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             $id_area = isset($_POST['id_area']) ? (int)$_POST['id_area'] : 0;
             $redir_params['area_id'] = $id_area;
             if ($id > 0) {
-                if ($del = $mysqli->prepare("DELETE FROM mantto_subareas WHERE id_subarea=? LIMIT 1")) {
+                $del = $mysqli->prepare("DELETE FROM mantto_subareas WHERE id_subarea=? LIMIT 1");
+                if ($del) {
                     $del->bind_param('i', $id);
                     if ($del->execute()) {
                         $r_msg = 'Subárea eliminada.';
+                        audit_log(
+                            $mysqli,
+                            $_SESSION['usuarioactual'],
+                            'subarea',
+                            (int)$id,
+                            'eliminar',
+                            json_encode(array('id_area' => $id_area)),
+                            $remoteAddr,
+                            $userAgent
+                        );
                     } else {
                         $r_err = 'Error al eliminar subárea: ' . $del->error;
                     }
@@ -215,7 +349,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
    GET: cargar catálogos
 --------------------------*/
 $areas = array();
-if ($st = $mysqli->prepare("SELECT id_area, nombre, activo FROM mantto_areas ORDER BY nombre ASC")) {
+$st = $mysqli->prepare("SELECT id_area, nombre, activo FROM mantto_areas ORDER BY nombre ASC");
+if ($st) {
     if ($st->execute()) {
         $st->bind_result($a_id, $a_nom, $a_act);
         while ($st->fetch()) {
@@ -229,13 +364,15 @@ if ($st = $mysqli->prepare("SELECT id_area, nombre, activo FROM mantto_areas ORD
     $err = 'Error al preparar listado de áreas: ' . $mysqli->error;
 }
 
+
 if ($area_id <= 0 && !empty($areas)) {
     $area_id = (int)$areas[0]['id_area'];
 }
 
 $subareas = array();
 if ($area_id > 0) {
-    if ($st = $mysqli->prepare("SELECT id_subarea, nombre, activo FROM mantto_subareas WHERE id_area=? ORDER BY nombre ASC")) {
+    $st = $mysqli->prepare("SELECT id_subarea, nombre, activo FROM mantto_subareas WHERE id_area=? ORDER BY nombre ASC");
+    if ($st) {
         $st->bind_param('i', $area_id);
         if ($st->execute()) {
             $st->bind_result($s_id, $s_nom, $s_act);
@@ -660,8 +797,8 @@ if ($area_id > 0) {
             </a>
         </div>
 
-        <?php if ($msg !== ''): ?><div class="msg ok"><i class="fa fa-check-circle"></i> <?php echo h($msg); ?></div><?php endif; ?>
-        <?php if ($err !== ''): ?><div class="msg err"><i class="fa fa-exclamation-triangle"></i> <?php echo h($err); ?></div><?php endif; ?>
+        <?php if ($msg !== ''): ?><div class="msg ok"><i class="fa fa-check-circle"></i> <?php echo html_escape($msg); ?></div><?php endif; ?>
+        <?php if ($err !== ''): ?><div class="msg err"><i class="fa fa-exclamation-triangle"></i> <?php echo html_escape($err); ?></div><?php endif; ?>
 
         <div class="row">
             <!-- Panel ÁREAS -->
@@ -669,7 +806,7 @@ if ($area_id > 0) {
                 <div class="card">
                     <h2>Áreas</h2>
                     <form method="post" autocomplete="off" style="margin-bottom:8px">
-                        <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                        <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                         <input type="hidden" name="action" value="add_area">
                         <label>Nueva área</label>
                         <input type="text" name="nombre" maxlength="120" placeholder="Ej. Refrigeración" required>
@@ -692,7 +829,7 @@ if ($area_id > 0) {
                                 <?php foreach ($areas as $a): ?>
                                     <tr<?php if ($area_id === (int)$a['id_area']) echo ' style="outline:1px solid #e5e7eb"'; ?>>
                                         <td><?php echo (int)$a['id_area']; ?></td>
-                                        <td><?php echo h($a['nombre']); ?></td>
+                                        <td><?php echo html_escape($a['nombre']); ?></td>
                                         <td>
                                             <?php if ((int)$a['activo'] === 1): ?>
                                                 <span class="pill pill-on">Activa</span>
@@ -706,7 +843,7 @@ if ($area_id > 0) {
                                             </a>
 
                                             <form method="post" style="display:inline" class="js-confirm" data-confirm="¿Cambiar estado del área?">
-                                                <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                                                <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                                                 <input type="hidden" name="action" value="toggle_area">
                                                 <input type="hidden" name="id" value="<?php echo (int)$a['id_area']; ?>">
                                                 <button class="btn btn-warning" type="submit">
@@ -715,7 +852,7 @@ if ($area_id > 0) {
                                             </form>
 
                                             <form method="post" style="display:inline" class="js-confirm" data-confirm="¿Eliminar el área? (Debe no tener subáreas)">
-                                                <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                                                <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                                                 <input type="hidden" name="action" value="delete_area">
                                                 <input type="hidden" name="id" value="<?php echo (int)$a['id_area']; ?>">
                                                 <button class="btn btn-danger" type="submit"><i class="fa fa-trash"></i> Del</button>
@@ -739,14 +876,14 @@ if ($area_id > 0) {
                 <div class="card">
                     <h2>Subáreas</h2>
                     <form method="post" autocomplete="off" style="margin-bottom:8px">
-                        <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                        <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                         <input type="hidden" name="action" value="add_subarea">
                         <label>Área</label>
                         <select name="id_area" required>
                             <option value="">Selecciona un área</option>
                             <?php foreach ($areas as $a): ?>
                                 <option value="<?php echo (int)$a['id_area']; ?>" <?php echo ($area_id === (int)$a['id_area'] ? ' selected' : ''); ?>>
-                                    <?php echo h($a['nombre']); ?>
+                                    <?php echo html_escape($a['nombre']); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -771,7 +908,7 @@ if ($area_id > 0) {
                                 <?php foreach ($subareas as $s): ?>
                                     <tr>
                                         <td><?php echo (int)$s['id_subarea']; ?></td>
-                                        <td><?php echo h($s['nombre']); ?></td>
+                                        <td><?php echo html_escape($s['nombre']); ?></td>
                                         <td>
                                             <?php if ((int)$s['activo'] === 1): ?>
                                                 <span class="pill pill-on">Activa</span>
@@ -781,7 +918,7 @@ if ($area_id > 0) {
                                         </td>
                                         <td class="actions">
                                             <form method="post" style="display:inline" class="js-confirm" data-confirm="¿Cambiar estado de la subárea?">
-                                                <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                                                <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                                                 <input type="hidden" name="action" value="toggle_subarea">
                                                 <input type="hidden" name="id" value="<?php echo (int)$s['id_subarea']; ?>">
                                                 <input type="hidden" name="id_area" value="<?php echo (int)$area_id; ?>">
@@ -791,7 +928,7 @@ if ($area_id > 0) {
                                             </form>
 
                                             <form method="post" style="display:inline" class="js-confirm" data-confirm="¿Eliminar la subárea?">
-                                                <input type="hidden" name="csrf" value="<?php echo h($csrf); ?>">
+                                                <input type="hidden" name="csrf" value="<?php echo html_escape($csrf); ?>">
                                                 <input type="hidden" name="action" value="delete_subarea">
                                                 <input type="hidden" name="id" value="<?php echo (int)$s['id_subarea']; ?>">
                                                 <input type="hidden" name="id_area" value="<?php echo (int)$area_id; ?>">
