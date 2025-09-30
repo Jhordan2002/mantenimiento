@@ -46,8 +46,18 @@ $remoteAddr = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
 $userAgent  = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
 
 
-$msg = isset($_GET['msg']) ? (string)$_GET['msg'] : '';
-$err = isset($_GET['err']) ? (string)$_GET['err'] : '';
+// Leer flash messages desde la sesión (y consumarlas)
+$msg = '';
+$err = '';
+if (isset($_SESSION['flash_msg'])) {
+    $msg = (string)$_SESSION['flash_msg'];
+    unset($_SESSION['flash_msg']);
+}
+if (isset($_SESSION['flash_err'])) {
+    $err = (string)$_SESSION['flash_err'];
+    unset($_SESSION['flash_err']);
+}
+
 $area_id = isset($_GET['area_id']) ? (int)$_GET['area_id'] : 0;
 
 /* -------------------------
@@ -89,7 +99,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         'area',
                                         (int)$new_id,
                                         'agregar',
-                                        json_encode(array('nombre' => $nombre)),
+                                        json_encode(array(
+                                            'id_area' => (int)$new_id,
+                                            'nombre'  => $nombre
+                                        ), JSON_UNESCAPED_UNICODE),
                                         $remoteAddr,
                                         $userAgent
                                     );
@@ -115,35 +128,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'toggle_area') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             if ($id > 0) {
+                $areaNombre = null;
                 $prev = null;
-                $s0 = $mysqli->prepare("SELECT activo FROM mantto_areas WHERE id_area=? LIMIT 1");
-                if ($s0) {
+                if ($s0 = $mysqli->prepare("SELECT nombre, activo FROM mantto_areas WHERE id_area=? LIMIT 1")) {
                     $s0->bind_param('i', $id);
                     if ($s0->execute()) {
-                        $s0->bind_result($prev);
+                        $s0->bind_result($areaNombre, $prev);
                         $s0->fetch();
                     }
                     $s0->close();
                 }
-
                 $accionLog = ((int)$prev === 1) ? 'desactivar' : 'activar';
 
-
-                $st = $mysqli->prepare("UPDATE mantto_areas SET activo=IF(activo=1,0,1) WHERE id_area=? LIMIT 1");
-                if ($st) {
+                if ($st = $mysqli->prepare("UPDATE mantto_areas SET activo=IF(activo=1,0,1) WHERE id_area=? LIMIT 1")) {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Área actualizada.';
-                        audit_log(
-                            $mysqli,
-                            $_SESSION['usuarioactual'],
-                            'area',
-                            (int)$id,
-                            $accionLog,
-                            json_encode(array('prev_activo' => (int)$prev)),
-                            $remoteAddr,
-                            $userAgent
-                        );
+                        $details = json_encode(array(
+                            'nombre'      => $areaNombre,
+                            'prev_activo' => (int)$prev
+                        ), JSON_UNESCAPED_UNICODE);
+                        audit_log($mysqli, $_SESSION['usuarioactual'], 'area', (int)$id, $accionLog, $details, $remoteAddr, $userAgent);
                     } else {
                         $r_err = 'Error al actualizar área: ' . $st->error;
                     }
@@ -153,6 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         }
+
 
 
         if ($action === 'delete_area') {
@@ -215,11 +221,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id_area = isset($_POST['id_area']) ? (int)$_POST['id_area'] : 0;
             $nombre  = isset($_POST['nombre']) ? trim($_POST['nombre']) : '';
             $redir_params['area_id'] = $id_area;
+
             if ($id_area <= 0) {
                 $r_err = 'Selecciona un área válida.';
             } elseif ($nombre === '') {
                 $r_err = 'Escribe el nombre de la subárea.';
             } else {
+                // ¿Existe ya esa subárea en la misma área?
                 $st = $mysqli->prepare("SELECT 1 FROM mantto_subareas WHERE id_area=? AND nombre=? LIMIT 1");
                 if ($st) {
                     $st->bind_param('is', $id_area, $nombre);
@@ -228,6 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($st->num_rows > 0) {
                             $r_err = 'Ya existe esa subárea en el área seleccionada.';
                         } else {
+                            // Insertar subárea
                             $st->close();
                             $ins = $mysqli->prepare("INSERT INTO mantto_subareas (id_area, nombre, activo) VALUES (?, ?, 1)");
                             if ($ins) {
@@ -235,13 +244,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 if ($ins->execute()) {
                                     $r_msg = 'Subárea agregada.';
                                     $new_id = $ins->insert_id;
+
+                                    // Obtener nombre del área para guardar un detalle entendible
+                                    $areaNombre = null;
+                                    if ($q = $mysqli->prepare("SELECT nombre FROM mantto_areas WHERE id_area=? LIMIT 1")) {
+                                        $q->bind_param('i', $id_area);
+                                        if ($q->execute()) {
+                                            $q->bind_result($areaNombre);
+                                            $q->fetch();
+                                        }
+                                        $q->close();
+                                    }
+
+                                    // Detalle "humano" para la bitácora
+                                    $details = json_encode(array(
+                                        'id_area'        => (int)$id_area,
+                                        'area_nombre'    => $areaNombre,
+                                        'subarea_nombre' => $nombre
+                                    ), JSON_UNESCAPED_UNICODE);
+
                                     audit_log(
                                         $mysqli,
                                         $_SESSION['usuarioactual'],
                                         'subarea',
                                         (int)$new_id,
                                         'agregar',
-                                        json_encode(array('id_area' => $id_area, 'nombre' => $nombre)),
+                                        $details,
                                         $remoteAddr,
                                         $userAgent
                                     );
@@ -256,13 +284,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         $r_err = 'Error al ejecutar SELECT subárea: ' . $st->error;
                     }
-                    $st && $st->close();
-                    $st = null;
+                    // Cerrar el SELECT si aún está abierto
+                    if ($st) {
+                        $st->close();
+                    }
                 } else {
                     $r_err = 'Error al preparar SELECT subárea: ' . $mysqli->error;
                 }
             }
         }
+
 
         if ($action === 'toggle_subarea') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
@@ -270,34 +301,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $redir_params['area_id'] = $id_area;
             if ($id > 0) {
                 $prev = null;
-                $s0 = $mysqli->prepare("SELECT activo FROM mantto_subareas WHERE id_subarea=? LIMIT 1");
-                if ($s0) {
+                $subNombre = null;
+                $areaNombre = null;
+                $areaFromRow = null;
+                if ($s0 = $mysqli->prepare("SELECT nombre, id_area, activo FROM mantto_subareas WHERE id_subarea=? LIMIT 1")) {
                     $s0->bind_param('i', $id);
                     if ($s0->execute()) {
-                        $s0->bind_result($prev);
+                        $s0->bind_result($subNombre, $areaFromRow, $prev);
                         $s0->fetch();
                     }
                     $s0->close();
                 }
+                // asegurar id_area
+                if ($id_area <= 0 && $areaFromRow) $id_area = (int)$areaFromRow;
+                if ($q = $mysqli->prepare("SELECT nombre FROM mantto_areas WHERE id_area=? LIMIT 1")) {
+                    $q->bind_param('i', $id_area);
+                    if ($q->execute()) {
+                        $q->bind_result($areaNombre);
+                        $q->fetch();
+                    }
+                    $q->close();
+                }
 
                 $accionLog = ((int)$prev === 1) ? 'desactivar' : 'activar';
 
-
-                $st = $mysqli->prepare("UPDATE mantto_subareas SET activo=IF(activo=1,0,1) WHERE id_subarea=? LIMIT 1");
-                if ($st) {
+                if ($st = $mysqli->prepare("UPDATE mantto_subareas SET activo=IF(activo=1,0,1) WHERE id_subarea=? LIMIT 1")) {
                     $st->bind_param('i', $id);
                     if ($st->execute()) {
                         $r_msg = 'Subárea actualizada.';
-                        audit_log(
-                            $mysqli,
-                            $_SESSION['usuarioactual'],
-                            'subarea',
-                            (int)$id,
-                            $accionLog,
-                            json_encode(array('prev_activo' => (int)$prev, 'id_area' => $id_area)),
-                            $remoteAddr,
-                            $userAgent
-                        );
+                        $details = json_encode(array(
+                            'prev_activo'    => (int)$prev,
+                            'id_area'        => (int)$id_area,
+                            'area_nombre'    => $areaNombre,
+                            'subarea_nombre' => $subNombre
+                        ), JSON_UNESCAPED_UNICODE);
+                        audit_log($mysqli, $_SESSION['usuarioactual'], 'subarea', (int)$id, $accionLog, $details, $remoteAddr, $userAgent);
                     } else {
                         $r_err = 'Error al actualizar subárea: ' . $st->error;
                     }
@@ -309,26 +347,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
+
         if ($action === 'delete_subarea') {
             $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
             $id_area = isset($_POST['id_area']) ? (int)$_POST['id_area'] : 0;
             $redir_params['area_id'] = $id_area;
+
             if ($id > 0) {
-                $del = $mysqli->prepare("DELETE FROM mantto_subareas WHERE id_subarea=? LIMIT 1");
-                if ($del) {
+                // capturar nombres antes de borrar
+                $subNombre = null;
+                $areaNombre = null;
+                $areaFromRow = null;
+                if ($si = $mysqli->prepare("SELECT nombre, id_area FROM mantto_subareas WHERE id_subarea=? LIMIT 1")) {
+                    $si->bind_param('i', $id);
+                    if ($si->execute()) {
+                        $si->bind_result($subNombre, $areaFromRow);
+                        $si->fetch();
+                    }
+                    $si->close();
+                }
+                if ($id_area <= 0 && $areaFromRow) $id_area = (int)$areaFromRow;
+                if ($q = $mysqli->prepare("SELECT nombre FROM mantto_areas WHERE id_area=? LIMIT 1")) {
+                    $q->bind_param('i', $id_area);
+                    if ($q->execute()) {
+                        $q->bind_result($areaNombre);
+                        $q->fetch();
+                    }
+                    $q->close();
+                }
+
+                if ($del = $mysqli->prepare("DELETE FROM mantto_subareas WHERE id_subarea=? LIMIT 1")) {
                     $del->bind_param('i', $id);
                     if ($del->execute()) {
                         $r_msg = 'Subárea eliminada.';
-                        audit_log(
-                            $mysqli,
-                            $_SESSION['usuarioactual'],
-                            'subarea',
-                            (int)$id,
-                            'eliminar',
-                            json_encode(array('id_area' => $id_area)),
-                            $remoteAddr,
-                            $userAgent
-                        );
+                        $details = json_encode(array(
+                            'id_area'        => (int)$id_area,
+                            'area_nombre'    => $areaNombre,
+                            'subarea_nombre' => $subNombre
+                        ), JSON_UNESCAPED_UNICODE);
+                        audit_log($mysqli, $_SESSION['usuarioactual'], 'subarea', (int)$id, 'eliminar', $details, $remoteAddr, $userAgent);
                     } else {
                         $r_err = 'Error al eliminar subárea: ' . $del->error;
                     }
@@ -340,8 +397,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    $query = array('msg' => $r_msg, 'err' => $r_err) + $redir_params;
-    header('Location: mantto_admin_eventos.php?' . http_build_query($query));
+    // Guardar como flash (una sola vez)
+    $_SESSION['flash_msg'] = $r_msg;
+    $_SESSION['flash_err'] = $r_err;
+
+    // Redirige solo con los params necesarios (p.ej. area_id), sin msg/err
+    $qs = $redir_params ? '?' . http_build_query($redir_params) : '';
+    header('Location: mantto_admin_eventos.php' . $qs, true, 303); // 303 See Other
     exit;
 }
 
@@ -387,6 +449,41 @@ if ($area_id > 0) {
         $err = 'Error al preparar listado de subáreas: ' . $mysqli->error;
     }
 }
+/* -------------------------
+   AUDIT: últimos movimientos
+--------------------------*/
+$auditRows = array();
+
+if ($stmt = $mysqli->prepare("
+    SELECT fecha, usuario, entidad, entidad_id, accion, detalles, ip
+    FROM mantto_bitacora
+    WHERE entidad IN ('area','subarea')
+    ORDER BY fecha DESC
+    LIMIT 100
+")) {
+    if ($stmt->execute()) {
+        $stmt->bind_result($b_fecha, $b_usuario, $b_entidad, $b_entidad_id, $b_accion, $b_detalles, $b_ip);
+        while ($stmt->fetch()) {
+            $auditRows[] = array(
+                'fecha'      => $b_fecha,
+                'usuario'    => $b_usuario,
+                'entidad'    => $b_entidad,
+                'entidad_id' => (int)$b_entidad_id,
+                'accion'     => $b_accion,
+                'detalles'   => $b_detalles,
+                'ip'         => $b_ip,
+            );
+        }
+    } else {
+        // opcional: muestra el error arriba con tu barra .msg
+        $err .= ' | Error historial (exec): ' . $stmt->error;
+    }
+    $stmt->close();
+} else {
+    $err .= ' | Error historial (prepare): ' . $mysqli->error;
+}
+
+
 ?>
 <!doctype html>
 <html lang="es">
@@ -781,6 +878,126 @@ if ($area_id > 0) {
         .modal-card.info .modal-head {
             background: linear-gradient(145deg, #3b82f6, #1d4ed8)
         }
+
+        /* ===== Drawer Historial ===== */
+        .drawer-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(17, 24, 39, .45);
+            display: none;
+            align-items: stretch;
+            justify-content: flex-end;
+            z-index: 10000;
+        }
+
+        .drawer {
+            width: 96%;
+            max-width: 700px;
+            background: #fff;
+            height: 100%;
+            box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
+            border-left: 1px solid var(--line);
+            transform: translateX(100%);
+            transition: transform .22s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .drawer.on {
+            transform: translateX(0);
+        }
+
+        .drawer-head {
+            padding: 12px;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--line);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .drawer-title {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .drawer-close {
+            background: transparent;
+            border: 0;
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .drawer-body {
+            padding: 12px;
+            overflow: auto;
+        }
+
+        .hist-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        .hist-table th,
+        .hist-table td {
+            padding: 8px;
+            border-bottom: 1px solid var(--line);
+            vertical-align: top;
+        }
+
+        .hist-table th {
+            background: #f8fafc;
+            font-weight: 700;
+        }
+
+        .hist-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 11px;
+            border-radius: 999px;
+            border: 1px solid #e5e7eb;
+            background: #f3f4f6;
+        }
+
+        .hist-tag.area {
+            background: #eef2ff;
+        }
+
+        .hist-tag.subarea {
+            background: #ecfeff;
+        }
+
+        .hist-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 11px;
+            border-radius: 999px;
+            color: #111827;
+            border: 1px solid #e5e7eb;
+        }
+
+        .hist-badge.add {
+            background: #e7f8ee;
+        }
+
+        /* agregar */
+        .hist-badge.toggle {
+            background: #fff7ed;
+        }
+
+        /* activar/desactivar */
+        .hist-badge.del {
+            background: #feecec;
+        }
+
+        /* eliminar */
     </style>
 </head>
 
@@ -792,6 +1009,9 @@ if ($area_id > 0) {
 
     <div class="wrap">
         <div class="top-actions">
+            <button id="btnHistory" class="btn btn-muted">
+                <i class="fa fa-history"></i> Historial
+            </button>
             <a href="menu.php" class="btn btn-muted">
                 <i class="fa fa-arrow-left"></i> Volver
             </a>
@@ -970,8 +1190,22 @@ if ($area_id > 0) {
             <div id="uiModalActions" class="modal-actions"><!-- botones por JS --></div>
         </div>
     </div>
+    <!-- Drawer Historial -->
+    <div id="drawerOverlay" class="drawer-overlay">
+        <div id="drawer" class="drawer">
+            <div class="drawer-head">
+                <h3 class="drawer-title"><i class="fa fa-history"></i> Historial de movimientos</h3>
+                <button id="drawerClose" type="button" class="drawer-close" aria-label="Cerrar">×</button>
+            </div>
+            <div id="drawerBody" class="drawer-body">
+                <!-- Se llena por JS -->
+            </div>
+        </div>
+    </div>
+
     <script>
         (function() {
+            /* ===== Modal genérico existente ===== */
             var overlay = document.getElementById('uiModal');
             var card = document.getElementById('uiModalCard');
             var titleEl = document.getElementById('uiModalTitle');
@@ -980,9 +1214,7 @@ if ($area_id > 0) {
             var btnX = document.getElementById('uiModalX');
 
             function clearActions() {
-                while (actionsEl.firstChild) {
-                    actionsEl.removeChild(actionsEl.firstChild);
-                }
+                while (actionsEl.firstChild) actionsEl.removeChild(actionsEl.firstChild);
             }
 
             function closeModal() {
@@ -994,7 +1226,6 @@ if ($area_id > 0) {
                 bodyEl.innerHTML = opts.html || '';
                 card.className = 'modal-card ' + (opts.type || 'info');
                 clearActions();
-
                 if (opts.confirm) {
                     var cancel = document.createElement('button');
                     cancel.type = 'button';
@@ -1008,11 +1239,8 @@ if ($area_id > 0) {
                     ok.textContent = opts.okText || 'Continuar';
                     ok.onclick = function() {
                         closeModal();
-                        if (typeof opts.onConfirm === 'function') {
-                            opts.onConfirm();
-                        }
+                        if (typeof opts.onConfirm === 'function') opts.onConfirm();
                     };
-
                     actionsEl.appendChild(cancel);
                     actionsEl.appendChild(ok);
                 } else {
@@ -1025,12 +1253,12 @@ if ($area_id > 0) {
                 }
                 overlay.style.display = 'flex';
             }
-            btnX.addEventListener('click', closeModal);
-            overlay.addEventListener('click', function(e) {
+            btnX && btnX.addEventListener('click', closeModal);
+            overlay && overlay.addEventListener('click', function(e) {
                 if (e.target === overlay) closeModal();
             });
 
-            // Mostrar msg/err de PHP en modal (autocerrar a 3s)
+            // Mostrar msg/err PHP en modal + autocierre 3s
             var phpMsg = <?php echo json_encode(isset($msg) ? $msg : ''); ?>;
             var phpErr = <?php echo json_encode(isset($err) ? $err : ''); ?>;
             var autoCloseMs = 3000;
@@ -1041,20 +1269,17 @@ if ($area_id > 0) {
                     html: '<p>' + phpErr.replace(/</g, '&lt;') + '</p>',
                     type: 'err'
                 });
-                setTimeout(function() {
-                    closeModal();
-                }, autoCloseMs);
+                setTimeout(closeModal, autoCloseMs);
             } else if (phpMsg) {
                 openModal({
                     title: 'Listo',
                     html: '<p>' + phpMsg.replace(/</g, '&lt;') + '</p>',
                     type: 'ok'
                 });
-                setTimeout(function() {
-                    closeModal();
-                }, autoCloseMs);
+                setTimeout(closeModal, autoCloseMs);
             }
-            // Auto-ocultar las barras .msg después de 3s
+
+            // Auto-ocultar barras .msg
             (function() {
                 var bars = document.querySelectorAll('.msg.ok, .msg.err');
                 if (!bars.length) return;
@@ -1071,7 +1296,6 @@ if ($area_id > 0) {
                 }, 3000);
             })();
 
-
             // Confirmaciones con modal
             var forms = document.querySelectorAll('form.js-confirm');
             for (var i = 0; i < forms.length; i++) {
@@ -1079,7 +1303,6 @@ if ($area_id > 0) {
                     form.addEventListener('submit', function(ev) {
                         ev.preventDefault();
                         var txt = form.getAttribute('data-confirm') || '¿Confirmas esta acción?';
-                        // Detección simple del tipo: errores para "delete_*"
                         var actEl = form.querySelector('input[name=action]');
                         var act = actEl ? actEl.value : '';
                         var tipo = (/^delete_/i.test(act) ? 'err' : 'info');
@@ -1098,8 +1321,151 @@ if ($area_id > 0) {
                     });
                 })(forms[i]);
             }
+
+            /* ===== Drawer Historial ===== */
+            var btnHistory = document.getElementById('btnHistory');
+            var dOverlay = document.getElementById('drawerOverlay');
+            var dEl = document.getElementById('drawer');
+            var dClose = document.getElementById('drawerClose');
+            var dBody = document.getElementById('drawerBody');
+
+            function openDrawer() {
+                if (!dOverlay || !dEl) return;
+                dOverlay.style.display = 'flex';
+                setTimeout(function() {
+                    dEl.classList.add('on');
+                }, 10);
+            }
+
+            function closeDrawer() {
+                if (!dOverlay || !dEl) return;
+                dEl.classList.remove('on');
+                setTimeout(function() {
+                    dOverlay.style.display = 'none';
+                }, 220);
+            }
+            dOverlay && dOverlay.addEventListener('click', function(e) {
+                if (e.target === dOverlay) closeDrawer();
+            });
+            dClose && dClose.addEventListener('click', closeDrawer);
+
+            // Datos del servidor (últimos 100)
+            var auditData = <?php echo json_encode($auditRows, JSON_UNESCAPED_UNICODE); ?>;
+
+            function escapeHTML(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+
+            function escapeHTML(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+
+            function parseDetails(jsonStr) {
+                try {
+                    return jsonStr ? JSON.parse(jsonStr) : {};
+                } catch (e) {
+                    return {};
+                }
+            }
+
+            // Construye frases “bonitas” en español
+            function prettyDetail(entidad, accion, detalles, entidad_id) {
+                var e = (entidad || '').toLowerCase();
+                var a = (accion || '').toLowerCase();
+                var d = parseDetails(detalles);
+
+                // nombres disponibles
+                var areaNombre = d.area_nombre || d.nombre || null;
+                var subareaNombre = d.subarea_nombre || d.nombre || null;
+                var idArea = d.id_area;
+
+                // fallback si no hay nombres
+                var refArea = areaNombre ? '«' + areaNombre + '»' : (idArea ? 'Área #' + idArea : 'Área #' + entidad_id);
+                var refSubarea = subareaNombre ? '«' + subareaNombre + '»' : 'Subárea #' + entidad_id;
+
+                // según entidad/acción
+                if (e === 'area') {
+                    if (a === 'agregar') return 'Se creó el área ' + refArea + ' (ID #' + entidad_id + ').';
+                    if (a === 'eliminar') return 'Se eliminó el área ' + refArea + ' (ID #' + entidad_id + ').';
+                    if (a === 'activar') return 'Se activó el área ' + refArea + '.';
+                    if (a === 'desactivar') return 'Se desactivó el área ' + refArea + '.';
+                }
+                if (e === 'subarea') {
+                    if (a === 'agregar') return 'Se creó la subárea ' + refSubarea + ' en ' + refArea + ' (ID #' + entidad_id + ').';
+                    if (a === 'eliminar') return 'Se eliminó la subárea ' + refSubarea + ' de ' + refArea + '.';
+                    if (a === 'activar') return 'Se activó la subárea ' + refSubarea + '.';
+                    if (a === 'desactivar') return 'Se desactivó la subárea ' + refSubarea + '.';
+                }
+
+                // fallback genérico
+                return (a ? ('Acción: ' + a + '. ') : '') + (detalles ? escapeHTML(detalles) : '');
+            }
+
+            function accionBadge(accion) {
+                var a = (accion || '').toLowerCase();
+                if (a === 'agregar') return '<span class="hist-badge add">agregar</span>';
+                if (a === 'eliminar') return '<span class="hist-badge del">eliminar</span>';
+                if (a === 'activar' || a === 'desactivar') return '<span class="hist-badge toggle">' + escapeHTML(a) + '</span>';
+                return '<span class="hist-badge">' + escapeHTML(accion || '') + '</span>';
+            }
+
+            function entidadTag(entidad) {
+                var e = (entidad || '').toLowerCase();
+                var cls = (e === 'area' ? 'area' : (e === 'subarea' ? 'subarea' : ''));
+                return '<span class="hist-tag ' + cls + '">' + escapeHTML(entidad || '') + '</span>';
+            }
+
+            function renderHistory(rows) {
+                if (!dBody) return;
+                if (!rows || !rows.length) {
+                    dBody.innerHTML = '<p class="muted">Sin movimientos registrados.</p>';
+                    return;
+                }
+                var html = '<table class="hist-table"><thead><tr>' +
+                    '<th style="width:140px">Fecha</th>' +
+                    '<th style="width:120px">Usuario</th>' +
+                    '<th style="width:110px">Entidad</th>' +
+                    '<th style="width:110px">Acción</th>' +
+                    '<th style="width:90px">Clave</th>' +
+                    '<th>Detalle</th>' +
+                    '</tr></thead><tbody>';
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    html += '<tr>' +
+                        '<td>' + escapeHTML(r.fecha) + '</td>' +
+                        '<td>' + escapeHTML(r.usuario) + '</td>' +
+                        '<td>' + entidadTag(r.entidad) + '</td>' +
+                        '<td>' + accionBadge(r.accion) + '</td>' +
+                        '<td>' + escapeHTML(r.entidad_id) + '</td>' +
+                        '<td>' + escapeHTML(prettyDetail(r.entidad, r.accion, r.detalles, r.entidad_id)) + '</td>' +
+                        '</tr>';
+                }
+                html += '</tbody></table>';
+                dBody.innerHTML = html;
+            }
+
+
+            btnHistory && btnHistory.addEventListener('click', function() {
+                renderHistory(auditData);
+                openDrawer();
+            });
+        })();
+        // Si por cualquier motivo vinieran msg/err en la URL, los quitamos sin recargar
+        (function() {
+            var p = new URLSearchParams(location.search);
+            if (p.has('msg') || p.has('err')) {
+                p.delete('msg');
+                p.delete('err');
+                var qs = p.toString();
+                history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+            }
         })();
     </script>
+
 
 </body>
 
