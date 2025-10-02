@@ -83,6 +83,14 @@ if ($result) {
                 <li><a href="mantto_admin_eventos.php" class="dropdown-link">Eventos (Áreas/Subáreas)</a></li>
               </ul>
             </li>
+            <li class="nav-item dropdown">
+              <a href="#" class="nav-link">Reposiciones</a>
+              <ul class="dropdown-menu">
+                <li><a href="rep_reposiciones_reporte.php" class="dropdown-link">Reporte de Reposiciones</a></li>
+                <li><a href="rep_reposiciones_captura.php" class="dropdown-link">Capturar Reposicion</a></li>
+                <li><a href="rep_inventario_admin.php" class="dropdown-link">Inventario</a></li>
+              </ul>
+            </li>
           </ul>
         </div>
 
