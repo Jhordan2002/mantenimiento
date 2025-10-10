@@ -1,6 +1,6 @@
 <?php
 
-$mysqli = new mysqli('localhost', 'root', 'soporte2017l', 'operaciones');
+$mysqli = new mysqli('lores.dyndns.org:3306', 'lores', 'reportes', 'operaciones');
 
 if ($mysqli->connect_error) {
 

@@ -157,8 +157,307 @@ if ($result) {
         </div> <!-- fin .nav-container -->
       </div>
   </nav>
+<?php
+// ====== LISTA DE REPORTES (panel de inicio) ======
+$reportes = array();
+
+/* 1) Verificar si existe la tabla mantto_evidencias */
+$hasEvid = false;
+if ($chk = $mysqli->query("
+  SELECT 1
+  FROM information_schema.tables
+  WHERE table_schema = DATABASE()
+    AND table_name   = 'mantto_evidencias'
+  LIMIT 1
+")) {
+  $hasEvid = (bool)$chk->num_rows;
+  $chk->free();
+}
+
+/* 2) SQL según exista o no mantto_evidencias
+      Reglas:
+      - Si hay extras => fotos = COUNT(extras)
+      - Si NO hay extras => fotos = (evidencia_path ? 1 : 0)
+      Además: traemos Sucursal (desde usuarios.sucursal por clave_suc), Área y Subárea por nombre.
+*/
+if ($hasEvid) {
+  // m.cnt será NULL cuando no existan extras para ese reporte (LEFT JOIN)
+  $sql = "
+    SELECT
+      r.id_reporte AS id,
+      r.folio,
+      r.fecha_alta,
+      r.empleado,
+      r.descripcion,
+      r.prioridad,
+      r.id_alerta,
+      r.evidencia_path,
+      u.sucursal AS sucursal_nombre,
+      a.nombre  AS area_nombre,
+      sa.nombre AS subarea_nombre,
+      IFNULL(m.cnt, CASE WHEN r.evidencia_path IS NULL OR r.evidencia_path = '' THEN 0 ELSE 1 END) AS fotos
+    FROM mantto_reportes r
+    /* nombre de sucursal a partir de clave_suc (puede haber varios usuarios por sucursal, tomamos MAX) */
+    LEFT JOIN (
+      SELECT clave_suc, MAX(sucursal) AS sucursal
+      FROM usuarios
+      GROUP BY clave_suc
+    ) u ON u.clave_suc = r.clave_suc
+    LEFT JOIN mantto_areas    a  ON a.id_area     = r.id_area
+    LEFT JOIN mantto_subareas sa ON sa.id_subarea = r.id_subarea
+    LEFT JOIN (
+      SELECT reporte_id, COUNT(*) AS cnt
+      FROM mantto_evidencias
+      GROUP BY reporte_id
+    ) m ON m.reporte_id = r.id_reporte
+    ORDER BY r.fecha_alta DESC
+    LIMIT 100
+  ";
+} else {
+  // No hay tabla de extras: cuenta solo la principal
+  $sql = "
+    SELECT
+      r.id_reporte AS id,
+      r.folio,
+      r.fecha_alta,
+      r.empleado,
+      r.descripcion,
+      r.prioridad,
+      r.id_alerta,
+      r.evidencia_path,
+      u.sucursal AS sucursal_nombre,
+      a.nombre  AS area_nombre,
+      sa.nombre AS subarea_nombre,
+      (CASE WHEN r.evidencia_path IS NULL OR r.evidencia_path = '' THEN 0 ELSE 1 END) AS fotos
+    FROM mantto_reportes r
+    LEFT JOIN (
+      SELECT clave_suc, MAX(sucursal) AS sucursal
+      FROM usuarios
+      GROUP BY clave_suc
+    ) u ON u.clave_suc = r.clave_suc
+    LEFT JOIN mantto_areas    a  ON a.id_area     = r.id_area
+    LEFT JOIN mantto_subareas sa ON sa.id_subarea = r.id_subarea
+    ORDER BY r.fecha_alta DESC
+    LIMIT 100
+  ";
+}
+
+
+/* 3) Ejecutar y llenar $reportes (NO sobreescribas 'fotos' después) */
+$res = $mysqli->query($sql);
+if ($res === false) {
+  echo '<div style="margin:90px 16px 0;padding:8px 12px;border:1px solid #f5c6cb;background:#f8d7da;color:#721c24;border-radius:8px">';
+  echo 'Error SQL (menu.php): '.htmlspecialchars($mysqli->error).'</div>';
+} else {
+  while ($row = $res->fetch_assoc()) {
+    // IMPORTANTE: no recalcules $row["fotos"] aquí
+    $reportes[] = $row;
+  }
+  $res->free();
+}
+?>
+
+
+
+<main class="rep-wrap">
+  <section class="rep-card">
+    <div class="rep-head">
+      <h2>Reportes de Mantenimiento</h2>
+      <span class="rep-sub">Últimos 100 reportes</span>
+    </div>
+
+    <div class="rep-table-wrap">
+      <table class="rep-table">
+<thead>
+  <tr>
+    <th>Fecha/Hora</th>
+    <th>Folio</th>
+    <th>Sucursal</th>
+    <th>Área</th>
+    <th>Subárea</th>
+    <th>Prioridad</th>
+    <th>Empleado</th>
+    <th>Descripción</th>
+    <th>Imágenes</th>
+    <th>Asignar</th>
+  </tr>
+</thead>
+
+        <tbody>
+          <?php if (empty($reportes)): ?>
+            <tr><td colspan="7" class="rep-empty">No hay reportes aún.</td></tr>
+          <?php else: foreach ($reportes as $r): ?>
+<tr>
+  <td><?= htmlspecialchars(date('Y-m-d H:i', strtotime($r['fecha_alta'])), ENT_QUOTES, 'UTF-8') ?></td>
+  <td><?= htmlspecialchars($r['folio'], ENT_QUOTES, 'UTF-8') ?></td>
+  <td><?= htmlspecialchars($r['sucursal_nombre'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
+  <td><?= htmlspecialchars($r['area_nombre'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
+  <td><?= htmlspecialchars($r['subarea_nombre'] ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
+  <td>
+    <?php
+      $prio = strtoupper($r['prioridad'] ?: 'MEDIA');
+      $cls  = ($prio === 'ALTA') ? 'prio-alta' : 'prio-normal';
+    ?>
+    <span class="rep-prio <?= $cls ?>"><?= htmlspecialchars($prio, ENT_QUOTES, 'UTF-8') ?></span>
+  </td>
+  <td><?= htmlspecialchars($r['empleado'], ENT_QUOTES, 'UTF-8') ?></td>
+  <td class="rep-desc"><?= htmlspecialchars($r['descripcion'], ENT_QUOTES, 'UTF-8') ?></td>
+  <td>
+    <button class="rep-btn rep-btn-img"
+            data-id="<?= (int)$r['id'] ?>"
+            title="Ver imágenes">
+      <i class="fa fa-picture-o"></i> (<?= (int)$r['fotos'] ?>)
+    </button>
+  </td>
+  <td>
+    <button class="rep-btn rep-btn-assign"
+            data-id="<?= (int)$r['id'] ?>"
+            data-folio="<?= htmlspecialchars($r['folio'], ENT_QUOTES, 'UTF-8') ?>"
+            title="Asignar responsable">
+      <i class="fa fa-user-plus"></i>
+    </button>
+  </td>
+</tr>
+
+          <?php endforeach; endif; ?>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<!-- ===== Modales ===== -->
+<div class="rep-modal" id="modalImgs" aria-hidden="true">
+  <div class="rep-modal__overlay" data-close="1"></div>
+  <div class="rep-modal__content">
+    <div class="rep-modal__head">
+      <h3>Imágenes del reporte</h3>
+      <button class="rep-modal__close" data-close="1" title="Cerrar">&times;</button>
+    </div>
+    <div class="rep-gallery" id="repGallery"></div>
+  </div>
+</div>
+
+<div class="rep-modal" id="modalAssign" aria-hidden="true">
+  <div class="rep-modal__overlay" data-close="1"></div>
+  <div class="rep-modal__content">
+    <div class="rep-modal__head">
+      <h3>Asignar responsable</h3>
+      <button class="rep-modal__close" data-close="1" title="Cerrar">&times;</button>
+    </div>
+    <form id="assignForm" class="rep-form">
+      <input type="hidden" name="reporte_id" id="assignReporteId">
+      <div class="rep-form-row">
+        <label>Folio</label>
+        <input type="text" id="assignFolio" readonly>
+      </div>
+      <div class="rep-form-row">
+        <label>Responsable</label>
+        <input type="text" name="responsable" id="assignResp" placeholder="Nombre del responsable" required>
+      </div>
+      <div class="rep-form-row">
+        <label>Comentario (opcional)</label>
+        <textarea name="comentario" id="assignComent" rows="3" placeholder="Indicaciones o notas"></textarea>
+      </div>
+      <div class="rep-actions">
+        <button type="submit" class="rep-btn rep-btn-primary"><i class="fa fa-check"></i> Asignar</button>
+        <button type="button" class="rep-btn" data-close="1">Cancelar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
   <!-- Archivo JavaScript para menú responsive -->
   <script src="js/menutiendas.js"></script>
+<script>
+// ===== Helpers modal =====
+function openModal(id){ var m=document.getElementById(id); if(!m) return; m.setAttribute('aria-hidden','false'); }
+function closeModal(id){ var m=document.getElementById(id); if(!m) return; m.setAttribute('aria-hidden','true'); }
+
+document.addEventListener('click', function(ev){
+  var t = ev.target;
+  if (t.dataset && t.dataset.close) {
+    closeModal(t.closest('.rep-modal').id);
+  }
+});
+
+// ===== Ver imágenes: carga por AJAX (rutas robustas) =====
+document.addEventListener('click', function(ev){
+  var btn = ev.target.closest('.rep-btn-img');
+  if (!btn) return;
+
+  var rid = btn.getAttribute('data-id');
+  var gallery = document.getElementById('repGallery');
+  gallery.innerHTML = '<p style="padding:8px;">Cargando imágenes...</p>';
+  openModal('modalImgs');
+
+  // Base del path actual (por si menu.php está en subcarpetas)
+  var base = location.pathname.replace(/[^\/]+$/, '');
+
+  fetch(base + 'mantto_get_evidencias.php?id=' + encodeURIComponent(rid), {
+    cache:'no-store',
+    credentials:'same-origin'
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (!j || !j.ok) {
+        gallery.innerHTML = '<p style="padding:8px;color:#b91c1c;">Sin sesión o error al cargar.</p>';
+        return;
+      }
+      if (!j.imagenes || !j.imagenes.length) {
+        gallery.innerHTML = '<p style="padding:8px;">Sin imágenes para este reporte.</p>';
+        return;
+      }
+
+      gallery.innerHTML = '';
+
+      j.imagenes.forEach(function(img){
+        // Contenedor uniforme con aspect-ratio
+        var fig = document.createElement('figure');
+        fig.className = 'rep-thumb';
+
+        var el = document.createElement('img');
+        el.src = base + img.url;          // ruta resuelta
+        el.alt = img.nombre || 'evidencia';
+        el.loading = 'lazy';
+        el.decoding = 'async';
+        el.onerror = function(){
+          fig.innerHTML = '<div style="font-size:12px;color:#b91c1c;padding:6px;text-align:center;">No se pudo cargar</div>';
+        };
+
+        // Si quieres que al hacer click abra la imagen en grande en otra pestaña:
+        fig.style.cursor = 'zoom-in';
+        fig.addEventListener('click', function(){
+          window.open(el.src, '_blank');
+        });
+
+        fig.appendChild(el);
+        gallery.appendChild(fig);
+      });
+    })
+    .catch(function(){
+      gallery.innerHTML = '<p style="padding:8px;color:#b91c1c;">Error de red al cargar imágenes.</p>';
+    });
+});
+</script>
+<script>
+(function setDataLabels(){
+  var table = document.querySelector('.rep-table');
+  if (!table) return;
+  var headers = Array.prototype.map.call(
+    table.querySelectorAll('thead th'),
+    function(th){ return th.textContent.trim(); }
+  );
+  table.querySelectorAll('tbody tr').forEach(function(tr){
+    Array.prototype.forEach.call(tr.children, function(td, idx){
+      td.setAttribute('data-label', headers[idx] || '');
+    });
+  });
+})();
+</script>
+
+
 </body>
 
 </html>
